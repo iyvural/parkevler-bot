@@ -29,11 +29,26 @@ Bu bot, `whatsapp-web.js` kullanir; sadece izin verilen telefon numaralarindan g
 - Bu durumda bot cevap vermez ve LID'yi beklemeye alir
 - Yonetici olarak su komutlari kullanabilirsiniz:
 - `bekleyenler`
+- `onaylilar`
 - `eslestir 905542812424`
 - `eslestir 905542812424 27651033026731`
+- `sil 905542812424`
 - `ADMIN_USERS` tanimli degilse veya admin numarasi da `lid` geliyorsa, `.env` icinde `ADMIN_CODE` tanimlayip su sekilde kullanabilirsiniz:
+- `yonetici KOD bekleyenler`
+- `yonetici KOD onaylilar`
 - `yonetici KOD eslestir 905542812424`
 - Eslesmeler `lid-mappings.json` dosyasinda saklanir
+
+## Ornek .env
+
+```env
+PORT=3000
+API_BASE_URL=https://parkevler2sitesi.com.tr/api.php
+ALLOWED_USERS=905542812424,905441112233
+ADMIN_USERS=905542812424
+ADMIN_CODE=123456
+PUPPETEER_EXECUTABLE_PATH=
+```
 
 ## Daire sorgusu
 

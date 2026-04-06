@@ -356,10 +356,14 @@ function getAdminHelpText() {
         'Admin komutlari',
         '',
         'bekleyenler',
+        'onaylilar',
         'eslestir 905542812424',
         'eslestir 905542812424 27651033026731',
+        'sil 905542812424',
         '',
         'ADMIN_CODE tanimliysa su da calisir:',
+        'yonetici KOD bekleyenler',
+        'yonetici KOD onaylilar',
         'yonetici KOD eslestir 905542812424',
     ].join('\n');
 }
@@ -401,6 +405,10 @@ function parseAdminCommand(text) {
         return { type: 'pending' };
     }
 
+    if (normalizedFirst === 'onaylilar') {
+        return { type: 'approved' };
+    }
+
     if (normalizedFirst === 'eslestir') {
         return {
             type: 'map',
@@ -410,9 +418,26 @@ function parseAdminCommand(text) {
         };
     }
 
-    if (normalizedFirst === 'yonetici' && parts.length >= 3) {
+    if (normalizedFirst === 'sil') {
         return {
-            type: normalizeCommandText(parts[2]) === 'eslestir' ? 'map' : 'unknown',
+            type: 'delete',
+            phone: normalizePhone(parts[1] || ''),
+            usedAdminCode: false,
+        };
+    }
+
+    if (normalizedFirst === 'yonetici' && parts.length >= 3) {
+        const normalizedCommand = normalizeCommandText(parts[2]);
+        return {
+            type: normalizedCommand === 'eslestir'
+                ? 'map'
+                : normalizedCommand === 'bekleyenler'
+                    ? 'pending'
+                    : normalizedCommand === 'onaylilar'
+                        ? 'approved'
+                        : normalizedCommand === 'sil'
+                            ? 'delete'
+                            : 'unknown',
             phone: normalizePhone(parts[3] || ''),
             lid: parts[4] || '',
             code: parts[1],
@@ -457,6 +482,18 @@ async function handleAdminCommand(message, identity, text) {
         return true;
     }
 
+    if (command.type === 'approved') {
+        const entries = Object.entries(lidMappings.phoneToLid);
+        if (entries.length === 0) {
+            await message.reply('Onayli eslesme yok.');
+            return true;
+        }
+
+        const lines = entries.map(([phone, lid], index) => `${index + 1}. ${phone} = ${lid}`);
+        await message.reply(`Onayli eslesmeler\n\n${lines.join('\n')}`);
+        return true;
+    }
+
     if (command.type === 'map') {
         if (!command.phone) {
             await message.reply(`Telefon numarasi eksik.\n\n${getAdminHelpText()}`);
@@ -477,6 +514,24 @@ async function handleAdminCommand(message, identity, text) {
         consumePendingLid(lidToMap);
         await message.reply(`Esleme kaydedildi.\n${command.phone} = ${lidToMap}`);
         console.log(`Admin esleme kaydetti: ${command.phone} = ${lidToMap}`);
+        return true;
+    }
+
+    if (command.type === 'delete') {
+        if (!command.phone) {
+            await message.reply(`Silinecek telefon numarasi eksik.\n\n${getAdminHelpText()}`);
+            return true;
+        }
+
+        if (!lidMappings.phoneToLid[command.phone]) {
+            await message.reply('Bu telefon icin kayitli eslesme yok.');
+            return true;
+        }
+
+        delete lidMappings.phoneToLid[command.phone];
+        saveLidMappings();
+        await message.reply(`Eslesme silindi: ${command.phone}`);
+        console.log(`Admin esleme sildi: ${command.phone}`);
         return true;
     }
 
