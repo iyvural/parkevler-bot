@@ -60,7 +60,7 @@ function extractNumericId(jid = '') {
 }
 
 function isPhoneJid(jid = '') {
-  return /@s\.whatsapp\.net$/.test(jid);
+  return /@s\.whatsapp\.net$/.test(cleanJid(jid));
 }
 
 function formatTL(amount) {
@@ -103,27 +103,44 @@ function getMessageText(msg) {
   ).trim();
 }
 
+function getPossibleSenderJids(msg) {
+  return [
+    msg?.key?.participant,
+    msg?.participant,
+    msg?.sender,
+    msg?.key?.remoteJid,
+    msg?.pushName,
+  ]
+    .filter(Boolean)
+    .map(cleanJid);
+}
+
 function isYetkiliFromMsg(msg) {
   const remoteJid = cleanJid(msg?.key?.remoteJid || '');
 
-  // Grup mesajlarına cevap yok
+  // Grup mesajlarına cevap verme
   if (!remoteJid || remoteJid.endsWith('@g.us')) {
     return { ok: false, matched: null, reason: 'group-or-empty' };
   }
 
-  // Yalnızca telefon formatındaki özel mesajlar
-  if (!isPhoneJid(remoteJid)) {
-    return { ok: false, matched: remoteJid, reason: 'not-phone-jid' };
-  }
-
   const allowedNumbers = ALLOWED_USERS.map(u => extractNumericId(u));
-  const senderNumber = extractNumericId(remoteJid);
+  const candidates = getPossibleSenderJids(msg);
 
-  if (allowedNumbers.includes(senderNumber)) {
-    return { ok: true, matched: remoteJid, reason: 'direct-match' };
+  // Önce telefon formatlı JID ara
+  const phoneCandidate = candidates.find(jid => isPhoneJid(jid));
+
+  if (phoneCandidate) {
+    const senderNumber = extractNumericId(phoneCandidate);
+
+    if (allowedNumbers.includes(senderNumber)) {
+      return { ok: true, matched: phoneCandidate, reason: 'direct-match' };
+    }
+
+    return { ok: false, matched: phoneCandidate, reason: 'no-match' };
   }
 
-  return { ok: false, matched: remoteJid, reason: 'no-match' };
+  // Telefon formatlı JID yoksa reddet
+  return { ok: false, matched: remoteJid, reason: 'not-phone-jid' };
 }
 
 // =========================
@@ -295,20 +312,21 @@ async function handleMessage(sock, msg) {
   const jid = msg?.key?.remoteJid;
   if (!jid) return;
 
-  // Grup mesajlarına cevap verme
   if (jid.endsWith('@g.us')) return;
 
   const authCheck = isYetkiliFromMsg(msg);
 
   if (!authCheck.ok) {
-    log(`⛔ Yetkisiz kullanıcı: remoteJid=${jid} reason=${authCheck.reason}`);
+    log(
+      `⛔ Yetkisiz kullanıcı: remoteJid=${jid} candidates=${JSON.stringify(getPossibleSenderJids(msg))} reason=${authCheck.reason}`
+    );
     return;
   }
 
   const text = getMessageText(msg);
   if (!text) return;
 
-  log(`📨 Mesaj [${jid}]: ${text}`);
+  log(`📨 Mesaj [${jid}] [user=${authCheck.matched}]: ${text}`);
 
   const textLower = text.toLowerCase();
   const MENU_KEYWORDS = [
@@ -489,18 +507,12 @@ function scheduleReconnect(delay = 5000) {
   }, delay);
 }
 
-// =========================
-// BAŞLAT
-// =========================
 log('🚀 BOT BAŞLIYOR...');
 log('🌐 SUNUCU CALISIYOR');
 log(`📁 Auth klasoru: ${AUTH_FOLDER}`);
 log(`🔗 QR: http://${PUBLIC_IP}:${PORT}/qr`);
 startBot();
 
-// =========================
-// HATA YAKALAMA
-// =========================
 process.on('uncaughtException', (err) => {
   log('uncaughtException: ' + err.message);
 });
