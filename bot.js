@@ -1,50 +1,53 @@
+'use strict';
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
 } = require('@whiskeysockets/baileys');
 
-const pino = require('pino');
-const QRCode = require('qrcode');
-const qrcodeTerminal = require('qrcode-terminal');
-const axios = require('axios');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+const pino        = require('pino');
+const QRCode      = require('qrcode');
+const axios       = require('axios');
+const http        = require('http');
+const fs          = require('fs');
+const path        = require('path');
 
 // =========================
-// AYARLAR
+// AYARLAR — sadece burası değişir
 // =========================
-
 const ALLOWED_USERS = [
   '905542812424@s.whatsapp.net',
   '905529201746@s.whatsapp.net',
 ];
 
 const API_BASE_URL = 'https://parkevler2sitesi.com.tr/api.php';
-const AUTH_FOLDER = path.join(__dirname, 'auth_info');
-const PORT = 8080;
-
-// AWS public IP'ni buraya yaz
-const PUBLIC_IP = '16.170.215.163';
+const AUTH_FOLDER  = path.join(__dirname, 'auth_info');
+const PORT         = 8080;
+const PUBLIC_IP    = '16.170.215.163';
 
 // =========================
-// GLOBAL
+// GLOBAL STATE
 // =========================
-let currentQR = null;
-let botConnected = false;
-let reconnectTimeout = null;
-let isStarting = false;
-const sessions = {};
+let sock            = null;
+let currentQR       = null;
+let botConnected    = false;
+let reconnectTimer  = null;
+let isStarting      = false;
+const sessions      = {};
 
 // =========================
-// HELPER
+// YARDIMCI FONKSİYONLAR
 // =========================
-function ensureDir(dirPath) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
+function ensureDir(p) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function log(msg) {
+  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  console.log(`[${ts}] ${msg}`);
 }
 
 function formatTL(amount) {
@@ -58,29 +61,33 @@ function formatTL(amount) {
 
 function normalizeDaireNo(input) {
   if (!input) return null;
-
-  const raw = String(input)
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, '')
-    .replace(/-/g, '');
-
+  const raw = String(input).trim().toUpperCase().replace(/\s+/g, '').replace(/-/g, '');
   const match = raw.match(/^([AB])(\d{1,2})$/);
   if (!match) return null;
-
   const blok = match[1];
-  const no = parseInt(match[2], 10);
-
+  const no   = parseInt(match[2], 10);
   if (blok === 'A' && no >= 1 && no <= 10) return `A${no}`;
   if (blok === 'B' && no >= 1 && no <= 60) return `B${no}`;
-
   return null;
 }
 
-function isYetkiliUser(jid) {
+function isYetkili(jid) {
   return ALLOWED_USERS.includes(jid);
 }
 
+function getMessageText(msg) {
+  return (
+    msg.message?.conversation ||
+    msg.message?.extendedTextMessage?.text ||
+    msg.message?.imageMessage?.caption ||
+    msg.message?.videoMessage?.caption ||
+    ''
+  ).trim();
+}
+
+// =========================
+// METİNLER
+// =========================
 function menuText() {
   return (
     '👋 *Parkevler2 Aidat Bilgi Servisi*\n\n' +
@@ -104,7 +111,6 @@ function formatBorcMesaji(daireNo, faturalar) {
   faturalar.forEach((f, i) => {
     const tutar = parseFloat(f.amount || 0);
     toplam += tutar;
-
     satirlar += `\n${i + 1}. *${f.period || '-'}* — ${f.category || '-'}\n`;
     if (f.description) satirlar += `   📝 ${f.description}\n`;
     satirlar += `   💰 ${formatTL(tutar)}\n`;
@@ -120,156 +126,108 @@ function formatBorcMesaji(daireNo, faturalar) {
   );
 }
 
+// =========================
+// API
+// =========================
 async function getBorclar(daireNo) {
   try {
     const response = await axios.get(API_BASE_URL, {
-      params: {
-        action: 'payment-filter',
-        daireno: daireNo,
-        status: 'odenmedi',
-      },
+      params: { action: 'payment-filter', daireno: daireNo, status: 'odenmedi' },
       timeout: 15000,
     });
-
     const data = response.data;
-
-    if (Array.isArray(data)) {
-      return { success: true, data };
-    }
-
-    if (data && data.status === 'error') {
-      return {
-        success: false,
-        message: data.message || 'Bilinmeyen hata.',
-      };
-    }
-
-    return {
-      success: false,
-      message: 'API geçersiz yanıt döndürdü.',
-    };
+    if (Array.isArray(data))            return { success: true, data };
+    if (data?.status === 'error')       return { success: false, message: data.message || 'Bilinmeyen hata.' };
+    return { success: false, message: 'API geçersiz yanıt döndürdü.' };
   } catch (err) {
-    return {
-      success: false,
-      message: 'Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.',
-    };
+    log('API hatası: ' + err.message);
+    return { success: false, message: 'Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.' };
   }
 }
 
 // =========================
-// HTTP SERVER
+// HTTP SUNUCUSU
 // =========================
-http
-  .createServer(async (req, res) => {
-    if (req.url === '/qr') {
-      if (botConnected) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`
-          <html>
-            <body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fff4">
-              <h2 style="color:green">✅ Bot zaten bağlı!</h2>
-              <p>WhatsApp bağlantısı aktif.</p>
-            </body>
-          </html>
-        `);
-        return;
-      }
+http.createServer(async (req, res) => {
 
-      if (currentQR) {
-        try {
-          const qrImage = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(`
-            <html>
-              <body style="font-family:sans-serif;text-align:center;padding:40px;background:#f9f9f9">
-                <h2>📱 Parkevler2 WhatsApp Bot</h2>
-                <p style="color:#555">
-                  WhatsApp → <b>Bağlı Cihazlar</b> → <b>Cihaz Ekle</b> → Bu kodu okutun
-                </p>
-                <div style="display:inline-block;padding:16px;background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">
-                  <img src="${qrImage}" style="display:block" />
-                </div>
-                <p style="color:#aaa;font-size:13px;margin-top:16px">
-                  Kod kısa sürede yenilenebilir — sayfa otomatik yenilenir
-                </p>
-                <script>
-                  setTimeout(() => location.reload(), 20000)
-                </script>
-              </body>
-            </html>
-          `);
-        } catch (e) {
-          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('QR oluşturulamadı: ' + e.message);
-        }
-        return;
-      }
-
+  if (req.url === '/qr') {
+    if (botConnected) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`
-        <html>
-          <body style="font-family:sans-serif;text-align:center;padding:40px">
-            <h3>⏳ QR hazırlanıyor...</h3>
-            <p>10 saniye bekleyin.</p>
-            <script>
-              setTimeout(() => location.reload(), 10000)
-            </script>
-          </body>
-        </html>
-      `);
+      res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fff4">
+        <h2 style="color:green">✅ Bot zaten bağlı!</h2><p>WhatsApp bağlantısı aktif.</p>
+      </body></html>`);
       return;
     }
 
-    if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          botConnected,
-          hasQR: !!currentQR,
-          authFolder: AUTH_FOLDER,
-          time: new Date().toISOString(),
-        })
-      );
+    if (currentQR) {
+      try {
+        const qrImage = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f9f9f9">
+          <h2>📱 Parkevler2 WhatsApp Bot</h2>
+          <p>WhatsApp → <b>Bağlı Cihazlar</b> → <b>Cihaz Ekle</b> → Bu kodu okutun</p>
+          <div style="display:inline-block;padding:16px;background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">
+            <img src="${qrImage}" style="display:block" />
+          </div>
+          <p style="color:#aaa;font-size:13px;margin-top:16px">Kod 20 saniyede yenilenir</p>
+          <script>setTimeout(()=>location.reload(),20000)</script>
+        </body></html>`);
+      } catch (e) {
+        res.writeHead(500); res.end('QR oluşturulamadı: ' + e.message);
+      }
       return;
     }
 
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(botConnected ? 'Bot aktif ve bagli' : 'Bot baslatiliyor... QR icin /qr adresine gidin');
-  })
-  .listen(PORT, '0.0.0.0', () => {
-    console.log('🚀 BOT BASLIYOR...');
-    console.log('🌐 SUNUCU CALISIYOR');
-    console.log('📁 Auth klasoru:', AUTH_FOLDER);
-    console.log(`🔗 QR: http://${PUBLIC_IP}:${PORT}/qr`);
-  });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px">
+      <h3>⏳ QR hazırlanıyor...</h3><p>10 saniye bekleyin.</p>
+      <script>setTimeout(()=>location.reload(),10000)</script>
+    </body></html>`);
+    return;
+  }
+
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      ok: true,
+      botConnected,
+      hasQR: !!currentQR,
+      allowedUsers: ALLOWED_USERS,
+      time: new Date().toISOString(),
+    }));
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(botConnected ? 'Bot aktif ve bagli' : 'Bot baslatiliyor... QR icin /qr adresine gidin');
+
+}).listen(PORT, '0.0.0.0', () => {
+  log(`🚀 HTTP sunucu başladı → http://${PUBLIC_IP}:${PORT}`);
+  log(`🔗 QR sayfası         → http://${PUBLIC_IP}:${PORT}/qr`);
+  log(`💚 Health check       → http://${PUBLIC_IP}:${PORT}/health`);
+});
 
 // =========================
 // MESAJ İŞLEME
 // =========================
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
-  if (!jid) return;
-
-  if (jid.endsWith('@g.us')) return;
-  if (!isYetkiliUser(jid)) return;
-
-  const text =
-    (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').trim();
-
-  if (!text) return;
-
-  const textLower = text.toLowerCase();
-
-  if (
-    ['merhaba', 'selam', 'hi', 'hey', 'başla', 'basla', 'menu', 'menü', 'yardım', 'yardim', 'help'].includes(textLower)
-  ) {
-    sessions[jid] = { step: 'bekle_daire_no' };
-    await sock.sendMessage(jid, { text: menuText() });
+  if (!jid)                   return;
+  if (jid.endsWith('@g.us'))  return;  // grup mesajlarını yoksay
+  if (!isYetkili(jid)) {
+    log(`⛔ Yetkisiz kullanıcı: ${jid}`);
     return;
   }
 
-  if (!sessions[jid]) {
+  const text = getMessageText(msg);
+  if (!text) return;
+
+  log(`📨 Mesaj [${jid}]: ${text}`);
+
+  const textLower = text.toLowerCase();
+  const MENU_KEYWORDS = ['merhaba','selam','hi','hey','başla','basla','menu','menü','yardım','yardim','help'];
+
+  if (MENU_KEYWORDS.includes(textLower) || !sessions[jid]) {
     sessions[jid] = { step: 'bekle_daire_no' };
     await sock.sendMessage(jid, { text: menuText() });
     return;
@@ -285,43 +243,27 @@ async function handleMessage(sock, msg) {
         text:
           '❌ Geçersiz daire numarası.\n\n' +
           'Sadece şu daireler geçerlidir:\n' +
-          '• A1 - A10\n' +
-          '• B1 - B60\n\n' +
-          'Lütfen tekrar yazın.\n' +
-          '_Örnek: A1, a5, B12, b60_',
+          '• A1 - A10\n• B1 - B60\n\n' +
+          'Lütfen tekrar yazın.\n_Örnek: A1, a5, B12, b60_',
       });
-      sessions[jid] = { step: 'bekle_daire_no' };
       return;
     }
 
-    await sock.sendMessage(jid, {
-      text: `🔍 *${daireNo}* nolu daire sorgulanıyor...`,
-    });
+    await sock.sendMessage(jid, { text: `🔍 *${daireNo}* nolu daire sorgulanıyor...` });
 
     const result = await getBorclar(daireNo);
 
     if (!result.success) {
       await sock.sendMessage(jid, {
-        text:
-          '❌ Hata: ' +
-          result.message +
-          '\n\nTekrar sorgulamak için geçerli bir daire numarası yazın.',
+        text: `❌ Hata: ${result.message}\n\nTekrar sorgulamak için geçerli bir daire numarası yazın.`,
       });
-      sessions[jid] = { step: 'bekle_daire_no' };
       return;
     }
 
+    await sock.sendMessage(jid, { text: formatBorcMesaji(daireNo, result.data) });
     await sock.sendMessage(jid, {
-      text: formatBorcMesaji(daireNo, result.data),
+      text: '🔄 Başka bir daire sorgulamak için daire numarasını yazın.\n⬅️ Ana menü için *menü* yazın.',
     });
-
-    await sock.sendMessage(jid, {
-      text:
-        '🔄 Başka bir daire sorgulamak için daire numarasını yazın.\n' +
-        '⬅️ Ana menü için *menü* yazın.',
-    });
-
-    sessions[jid] = { step: 'bekle_daire_no' };
   }
 }
 
@@ -330,112 +272,111 @@ async function handleMessage(sock, msg) {
 // =========================
 async function startBot() {
   if (isStarting) {
-    console.log('Bot zaten baslatiliyor, tekrar deneme atlandi.');
+    log('Bot zaten başlatılıyor, atlandı.');
     return;
   }
-
   isStarting = true;
 
   try {
     ensureDir(AUTH_FOLDER);
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
-    const { version } = await fetchLatestBaileysVersion();
+    const { version }          = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
+    log(`Baileys version: ${version.join('.')}`);
+
+    sock = makeWASocket({
       version,
       logger: pino({ level: 'silent' }),
-      auth: state,
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 30000,
-      markOnlineOnConnect: false,
-      syncFullHistory: false,
+      auth: {
+        creds: state.creds,
+        // Signal key store'u cache'le — ghost connection'ı önler
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+      },
+      connectTimeoutMs:      60_000,
+      defaultQueryTimeoutMs: 30_000,
+      keepAliveIntervalMs:   15_000,   // daha sık ping — bağlantıyı canlı tutar
+      retryRequestDelayMs:   2_000,
+      maxMsgRetryCount:      5,
+      markOnlineOnConnect:   false,
+      syncFullHistory:       false,
+      generateHighQualityLinkPreview: false,
     });
 
-    sock.ev.on('connection.update', (update) => {
+    // --- Bağlantı olayları ---
+    sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        currentQR = qr;
+        currentQR    = qr;
         botConnected = false;
-
-        console.log('\n📱 QR HAZIR');
-        console.log(`🌐 Web QR: http://${PUBLIC_IP}:${PORT}/qr`);
-        console.log('📲 Terminal QR aşağıda:\n');
-
-        qrcodeTerminal.generate(qr, { small: true });
+        log('📱 Yeni QR üretildi → ' + `http://${PUBLIC_IP}:${PORT}/qr`);
       }
 
       if (connection === 'open') {
         botConnected = true;
-        currentQR = null;
-        console.log('✅ WhatsApp baglantisi kuruldu! Bot aktif.');
+        currentQR    = null;
+        log('✅ WhatsApp bağlantısı kuruldu! Bot aktif.');
       }
 
       if (connection === 'close') {
         botConnected = false;
+        const code          = lastDisconnect?.error?.output?.statusCode;
+        const isLoggedOut   = code === DisconnectReason.loggedOut;
+        const isBadSession  = code === DisconnectReason.badSession;
 
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        log(`❌ Bağlantı kapandı. Kod: ${code}`);
 
-        console.log('❌ Baglanti kapandi. Kod:', statusCode, 'Reconnect:', shouldReconnect);
-
-        if (shouldReconnect) {
-          if (reconnectTimeout) clearTimeout(reconnectTimeout);
-
-          reconnectTimeout = setTimeout(() => {
-            console.log('🔄 Bot yeniden baglanmayi deniyor...');
-            startBot().catch((err) => {
-              console.error('Reconnect hatasi:', err);
-            });
-          }, 5000);
-        } else {
+        if (isLoggedOut || isBadSession) {
+          log('⚠️  Oturum geçersiz. Auth klasörü siliniyor, yeniden QR gerekiyor...');
+          fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
           currentQR = null;
-          console.log('⚠️ Oturum logout oldu. Yeniden QR okutulmasi gerekir.');
         }
+
+        // Her durumda yeniden bağlan (badSession için de — auth silindi, yeni QR çıkacak)
+        scheduleReconnect(isLoggedOut || isBadSession ? 2000 : 5000);
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
+    // --- Mesaj olayları ---
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
-
       for (const msg of messages) {
-        if (!msg.key.fromMe) {
-          try {
-            await handleMessage(sock, msg);
-          } catch (err) {
-            console.error('Mesaj isleme hatasi:', err);
-          }
+        if (msg.key.fromMe) continue;
+        try {
+          await handleMessage(sock, msg);
+        } catch (err) {
+          log('Mesaj işleme hatası: ' + err.message);
         }
       }
     });
+
   } catch (err) {
     botConnected = false;
-    console.error('startBot hatasi:', err);
-
-    if (reconnectTimeout) clearTimeout(reconnectTimeout);
-
-    reconnectTimeout = setTimeout(() => {
-      console.log('Hata sonrasi yeniden baslatma deneniyor...');
-      startBot().catch((e) => console.error('Tekrar baslatma hatasi:', e));
-    }, 10000);
+    log('startBot hatası: ' + err.message);
+    scheduleReconnect(10_000);
   } finally {
     isStarting = false;
   }
 }
 
+function scheduleReconnect(delay = 5000) {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    log(`🔄 Yeniden bağlanılıyor... (${delay}ms sonra)`);
+    startBot().catch(e => log('Reconnect hatası: ' + e.message));
+  }, delay);
+}
+
+// =========================
+// BAŞLAT
+// =========================
 startBot();
 
 // =========================
 // HATA YAKALAMA
 // =========================
-process.on('uncaughtException', (err) => {
-  console.error('uncaughtException:', err);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('unhandledRejection:', reason);
-});
+process.on('uncaughtException',  (err)    => log('uncaughtException: '  + err.message));
+process.on('unhandledRejection', (reason) => log('unhandledRejection: ' + reason));
