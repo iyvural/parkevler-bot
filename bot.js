@@ -14,6 +14,7 @@ const http = require('http');
 let currentQR = null;
 let botConnected = false;
 let didWarnMissingAllowedUsers = false;
+const lidToPhoneMap = new Map();
 
 const API_BASE_URL = process.env.API_BASE_URL || 'https://parkevler2sitesi.com.tr/api.php';
 const PORT = Number(process.env.PORT || 3000);
@@ -101,6 +102,23 @@ function getPhoneVariants(value) {
     return Array.from(variants);
 }
 
+function normalizeJidUser(jid) {
+    return String(jid || '').split('@')[0];
+}
+
+function rememberPhoneMapping(lid, phoneJid) {
+    const lidUser = normalizeJidUser(lid);
+    const phoneUser = normalizeJidUser(phoneJid);
+    const normalizedPhone = normalizePhone(phoneUser);
+
+    if (!lidUser || !normalizedPhone) {
+        return;
+    }
+
+    lidToPhoneMap.set(lidUser, normalizedPhone);
+    console.log(`LID eslemesi kaydedildi: ${lidUser} -> ${normalizedPhone}`);
+}
+
 function extractCandidatePhones(msg) {
     const candidates = [
         msg?.key?.remoteJid,
@@ -128,6 +146,10 @@ function extractCandidatePhones(msg) {
         }
 
         if (raw.includes('@lid')) {
+            const mappedPhone = lidToPhoneMap.get(normalizeJidUser(raw));
+            if (mappedPhone) {
+                phones.add(mappedPhone);
+            }
             continue;
         }
 
@@ -374,6 +396,9 @@ async function startBot() {
     });
 
     sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+        rememberPhoneMapping(lid, jid);
+    });
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') {
             return;
