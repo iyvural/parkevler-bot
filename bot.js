@@ -101,26 +101,68 @@ function getPhoneVariants(value) {
     return Array.from(variants);
 }
 
-function isAllowedUser(jid) {
+function extractCandidatePhones(msg) {
+    const candidates = [
+        msg?.key?.remoteJid,
+        msg?.key?.participant,
+        msg?.participant,
+        msg?.senderPn,
+        msg?.participantPn,
+        msg?.pushName,
+        msg?.message?.extendedTextMessage?.contextInfo?.participant,
+        msg?.message?.extendedTextMessage?.contextInfo?.participantPn,
+        msg?.message?.senderKeyDistributionMessage?.groupId,
+    ];
+
+    const phones = new Set();
+
+    for (const candidate of candidates) {
+        const raw = String(candidate || '');
+        if (!raw) {
+            continue;
+        }
+
+        if (raw.includes('@s.whatsapp.net')) {
+            phones.add(raw.split('@')[0]);
+            continue;
+        }
+
+        if (raw.includes('@lid')) {
+            continue;
+        }
+
+        const normalized = normalizePhone(raw);
+        if (normalized.length >= 10 && normalized.length <= 15) {
+            phones.add(normalized);
+        }
+    }
+
+    return Array.from(phones);
+}
+
+function isAllowedUser(msg) {
     if (ALLOWED_USERS.size === 0) {
         if (!didWarnMissingAllowedUsers) {
             console.warn('UYARI: ALLOWED_USERS bos. Bot tum ozel mesajlari yanitlayacak.');
             didWarnMissingAllowedUsers = true;
         }
-        return true;
+        return { allowed: true, matchedPhone: null, candidatePhones: [] };
     }
 
-    const senderPhone = jid.split('@')[0];
-    const senderVariants = getPhoneVariants(senderPhone);
+    const candidatePhones = extractCandidatePhones(msg);
 
-    for (const allowedUser of ALLOWED_USERS) {
-        const allowedVariants = getPhoneVariants(allowedUser);
-        if (allowedVariants.some((variant) => senderVariants.includes(variant))) {
-            return true;
+    for (const senderPhone of candidatePhones) {
+        const senderVariants = getPhoneVariants(senderPhone);
+
+        for (const allowedUser of ALLOWED_USERS) {
+            const allowedVariants = getPhoneVariants(allowedUser);
+            if (allowedVariants.some((variant) => senderVariants.includes(variant))) {
+                return { allowed: true, matchedPhone: senderPhone, candidatePhones };
+            }
         }
     }
 
-    return false;
+    return { allowed: false, matchedPhone: null, candidatePhones };
 }
 
 function normalizeApartmentInput(input) {
@@ -249,9 +291,14 @@ async function handleMessage(sock, msg) {
         return;
     }
 
-    if (!isAllowedUser(jid)) {
-        console.log(`Izin verilmeyen numara engellendi: ${jid}`);
+    const auth = isAllowedUser(msg);
+    if (!auth.allowed) {
+        console.log(`Izin verilmeyen numara engellendi: ${jid} phones=${JSON.stringify(auth.candidatePhones)}`);
         return;
+    }
+
+    if (auth.matchedPhone) {
+        console.log(`Izinli kullanici eslesti: ${auth.matchedPhone}`);
     }
 
     const text = getMessageText(msg);
