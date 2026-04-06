@@ -93,7 +93,7 @@ async function startBot() {
     version,
     logger: pino({ level: 'silent' }),
     auth: state,
-    printQRInTerminal: false,
+    printQRInTerminal: true,
   });
 
   sock.ev.on('connection.update', (update) => {
