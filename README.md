@@ -23,6 +23,18 @@ Bu bot, `whatsapp-web.js` kullanir; sadece izin verilen telefon numaralarindan g
 - Ornek: `905551112233,05551112233,+90 544 111 22 33`
 - Bot numaralari esnek normalize eder ve ayni kisiyi farkli formatlarda da tanir
 
+## LID eslestirme
+
+- Bazi kullanicilar WhatsApp tarafinda telefon yerine `lid` kimligi ile gelebilir
+- Bu durumda bot cevap vermez ve LID'yi beklemeye alir
+- Yonetici olarak su komutlari kullanabilirsiniz:
+- `bekleyenler`
+- `eslestir 905542812424`
+- `eslestir 905542812424 27651033026731`
+- `ADMIN_USERS` tanimli degilse veya admin numarasi da `lid` geliyorsa, `.env` icinde `ADMIN_CODE` tanimlayip su sekilde kullanabilirsiniz:
+- `yonetici KOD eslestir 905542812424`
+- Eslesmeler `lid-mappings.json` dosyasinda saklanir
+
 ## Daire sorgusu
 
 Kullanici sadece su formatlarda mesaj gondermelidir:

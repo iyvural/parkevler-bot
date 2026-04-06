@@ -4,15 +4,23 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const axios = require('axios');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 let currentQR = null;
 let botConnected = false;
 let didWarnMissingAllowedUsers = false;
+let didWarnMissingAdminUsers = false;
+const pendingLids = [];
 
 const API_BASE_URL = process.env.API_BASE_URL || 'https://parkevler2sitesi.com.tr/api.php';
 const PORT = Number(process.env.PORT || 3000);
 const ALLOWED_USERS = parseAllowedUsers(process.env.ALLOWED_USERS || '');
+const ADMIN_USERS = parseAllowedUsers(process.env.ADMIN_USERS || '');
+const ADMIN_CODE = String(process.env.ADMIN_CODE || '').trim();
 const PUPPETEER_EXECUTABLE_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+const LID_MAPPINGS_PATH = path.join(__dirname, 'lid-mappings.json');
+const lidMappings = loadLidMappings();
 
 http.createServer((req, res) => {
     if (req.url === '/qr') {
@@ -57,6 +65,26 @@ function parseAllowedUsers(rawValue) {
             .map((value) => normalizePhone(value))
             .filter(Boolean)
     );
+}
+
+function loadLidMappings() {
+    try {
+        if (!fs.existsSync(LID_MAPPINGS_PATH)) {
+            return { phoneToLid: {} };
+        }
+
+        const parsed = JSON.parse(fs.readFileSync(LID_MAPPINGS_PATH, 'utf8'));
+        return {
+            phoneToLid: parsed && typeof parsed.phoneToLid === 'object' ? parsed.phoneToLid : {},
+        };
+    } catch (error) {
+        console.error('LID mapping dosyasi okunamadi:', error.message);
+        return { phoneToLid: {} };
+    }
+}
+
+function saveLidMappings() {
+    fs.writeFileSync(LID_MAPPINGS_PATH, JSON.stringify(lidMappings, null, 2));
 }
 
 function normalizePhone(value) {
@@ -105,6 +133,71 @@ function extractPhoneFromChatId(chatId) {
     return normalizePhone(value.split('@')[0]);
 }
 
+function extractLidFromChatId(chatId) {
+    const value = String(chatId || '');
+    if (!value.endsWith('@lid')) {
+        return '';
+    }
+
+    return value.split('@')[0];
+}
+
+function getMappedPhoneByLid(lid) {
+    const normalizedLid = String(lid || '').trim();
+    if (!normalizedLid) {
+        return '';
+    }
+
+    for (const [phone, mappedLid] of Object.entries(lidMappings.phoneToLid)) {
+        if (String(mappedLid) === normalizedLid) {
+            return normalizePhone(phone);
+        }
+    }
+
+    return '';
+}
+
+function setLidMapping(phone, lid) {
+    const normalizedPhone = normalizePhone(phone);
+    const normalizedLid = String(lid || '').trim();
+    if (!normalizedPhone || !normalizedLid) {
+        return false;
+    }
+
+    lidMappings.phoneToLid[normalizedPhone] = normalizedLid;
+    saveLidMappings();
+    return true;
+}
+
+function addPendingLid(lid) {
+    const normalizedLid = String(lid || '').trim();
+    if (!normalizedLid) {
+        return;
+    }
+
+    const existing = pendingLids.find((entry) => entry.lid === normalizedLid);
+    if (existing) {
+        existing.seenAt = new Date().toISOString();
+        return;
+    }
+
+    pendingLids.unshift({
+        lid: normalizedLid,
+        seenAt: new Date().toISOString(),
+    });
+
+    if (pendingLids.length > 20) {
+        pendingLids.length = 20;
+    }
+}
+
+function consumePendingLid(lid) {
+    const index = pendingLids.findIndex((entry) => entry.lid === lid);
+    if (index >= 0) {
+        pendingLids.splice(index, 1);
+    }
+}
+
 function isAllowedPhone(phone) {
     if (ALLOWED_USERS.size === 0) {
         if (!didWarnMissingAllowedUsers) {
@@ -119,6 +212,27 @@ function isAllowedPhone(phone) {
     for (const allowedUser of ALLOWED_USERS) {
         const allowedVariants = getPhoneVariants(allowedUser);
         if (allowedVariants.some((variant) => senderVariants.includes(variant))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isAdminPhone(phone) {
+    if (ADMIN_USERS.size === 0) {
+        if (!didWarnMissingAdminUsers) {
+            console.warn('UYARI: ADMIN_USERS bos. Admin komutlari yalniz ADMIN_CODE ile calisacak.');
+            didWarnMissingAdminUsers = true;
+        }
+        return false;
+    }
+
+    const senderVariants = getPhoneVariants(phone);
+
+    for (const adminUser of ADMIN_USERS) {
+        const adminVariants = getPhoneVariants(adminUser);
+        if (adminVariants.some((variant) => senderVariants.includes(variant))) {
             return true;
         }
     }
@@ -237,15 +351,160 @@ function getHelpText() {
     ].join('\n');
 }
 
+function getAdminHelpText() {
+    return [
+        'Admin komutlari',
+        '',
+        'bekleyenler',
+        'eslestir 905542812424',
+        'eslestir 905542812424 27651033026731',
+        '',
+        'ADMIN_CODE tanimliysa su da calisir:',
+        'yonetici KOD eslestir 905542812424',
+    ].join('\n');
+}
+
+function resolveSenderIdentity(message) {
+    const phone = extractPhoneFromChatId(message.from);
+    if (phone) {
+        return {
+            phone,
+            lid: '',
+            rawId: message.from,
+        };
+    }
+
+    const lid = extractLidFromChatId(message.from);
+    if (lid) {
+        return {
+            phone: getMappedPhoneByLid(lid),
+            lid,
+            rawId: message.from,
+        };
+    }
+
+    return {
+        phone: '',
+        lid: '',
+        rawId: message.from,
+    };
+}
+
+function parseAdminCommand(text) {
+    const parts = String(text || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+        return null;
+    }
+
+    const normalizedFirst = normalizeCommandText(parts[0]);
+    if (normalizedFirst === 'bekleyenler') {
+        return { type: 'pending' };
+    }
+
+    if (normalizedFirst === 'eslestir') {
+        return {
+            type: 'map',
+            phone: normalizePhone(parts[1] || ''),
+            lid: parts[2] || '',
+            usedAdminCode: false,
+        };
+    }
+
+    if (normalizedFirst === 'yonetici' && parts.length >= 3) {
+        return {
+            type: normalizeCommandText(parts[2]) === 'eslestir' ? 'map' : 'unknown',
+            phone: normalizePhone(parts[3] || ''),
+            lid: parts[4] || '',
+            code: parts[1],
+            usedAdminCode: true,
+        };
+    }
+
+    return null;
+}
+
+function isAuthorizedForAdminCommand(identity, command) {
+    if (identity.phone && isAdminPhone(identity.phone)) {
+        return true;
+    }
+
+    if (!command?.usedAdminCode) {
+        return false;
+    }
+
+    return Boolean(ADMIN_CODE) && command.code === ADMIN_CODE;
+}
+
+async function handleAdminCommand(message, identity, text) {
+    const command = parseAdminCommand(text);
+    if (!command) {
+        return false;
+    }
+
+    if (!isAuthorizedForAdminCommand(identity, command)) {
+        await message.reply('Admin yetkisi yok. Gecerli admin numarasi veya dogru ADMIN_CODE gerekli.');
+        return true;
+    }
+
+    if (command.type === 'pending') {
+        if (pendingLids.length === 0) {
+            await message.reply('Bekleyen LID yok.');
+            return true;
+        }
+
+        const lines = pendingLids.map((entry, index) => `${index + 1}. ${entry.lid} - ${entry.seenAt}`);
+        await message.reply(`Bekleyen LID listesi\n\n${lines.join('\n')}`);
+        return true;
+    }
+
+    if (command.type === 'map') {
+        if (!command.phone) {
+            await message.reply(`Telefon numarasi eksik.\n\n${getAdminHelpText()}`);
+            return true;
+        }
+
+        const lidToMap = String(command.lid || '').trim() || pendingLids[0]?.lid || '';
+        if (!lidToMap) {
+            await message.reply('Esletirilecek bekleyen LID bulunamadi. Once o kisi bota bir mesaj gondersin.');
+            return true;
+        }
+
+        if (!setLidMapping(command.phone, lidToMap)) {
+            await message.reply('Esleme kaydedilemedi.');
+            return true;
+        }
+
+        consumePendingLid(lidToMap);
+        await message.reply(`Esleme kaydedildi.\n${command.phone} = ${lidToMap}`);
+        console.log(`Admin esleme kaydetti: ${command.phone} = ${lidToMap}`);
+        return true;
+    }
+
+    await message.reply(getAdminHelpText());
+    return true;
+}
+
 async function handleMessage(message) {
     const chatId = message.from;
     if (!chatId || chatId.endsWith('@g.us')) {
         return;
     }
 
-    const senderPhone = extractPhoneFromChatId(chatId);
+    const identity = resolveSenderIdentity(message);
+    const text = String(message.body || '').trim();
+
+    if (await handleAdminCommand(message, identity, text)) {
+        return;
+    }
+
+    const senderPhone = identity.phone;
     if (!senderPhone) {
-        console.log(`Telefon numarasi okunamadi: ${chatId}`);
+        if (identity.lid) {
+            addPendingLid(identity.lid);
+            console.log(`Telefon numarasi okunamadi: ${chatId} (bekleyen LID kaydedildi)`);
+        } else {
+            console.log(`Telefon numarasi okunamadi: ${chatId}`);
+        }
         return;
     }
 
@@ -254,7 +513,6 @@ async function handleMessage(message) {
         return;
     }
 
-    const text = String(message.body || '').trim();
     if (!text) {
         return;
     }

@@ -1,6 +1,7 @@
 node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
+lid-mappings.json
 *.log
 .env
 npm-debug.log*
