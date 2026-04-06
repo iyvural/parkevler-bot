@@ -1,12 +1,6 @@
 require('dotenv').config();
 
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-} = require('@whiskeysockets/baileys');
-const pino = require('pino');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const axios = require('axios');
 const http = require('http');
@@ -14,28 +8,28 @@ const http = require('http');
 let currentQR = null;
 let botConnected = false;
 let didWarnMissingAllowedUsers = false;
-const lidToPhoneMap = new Map();
 
 const API_BASE_URL = process.env.API_BASE_URL || 'https://parkevler2sitesi.com.tr/api.php';
 const PORT = Number(process.env.PORT || 3000);
 const ALLOWED_USERS = parseAllowedUsers(process.env.ALLOWED_USERS || '');
+const PUPPETEER_EXECUTABLE_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
 
-http.createServer(async (req, res) => {
+http.createServer((req, res) => {
     if (req.url === '/qr') {
         if (botConnected) {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end('<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fff4"><h2 style="color:green">Bot zaten bagli</h2><p>WhatsApp baglantisi aktif.</p></body></html>');
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Bot zaten bagli. QR gerekli degil.');
             return;
         }
 
         if (currentQR) {
             res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end('QR terminal uzerinde uretiliyor. Sunucu konsolundaki karekodu WhatsApp ile taratin.');
+            res.end('QR terminal uzerinde uretiliyor. Sunucu konsolundaki QR kodu taratin.');
             return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h3>QR hazirlaniyor...</h3><p>10 saniye sonra sayfa yenilenecek.</p><script>setTimeout(()=>location.reload(), 10000)</script></body></html>');
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('QR hazirlaniyor. Birazdan terminale basilacak.');
         return;
     }
 
@@ -51,7 +45,7 @@ http.createServer(async (req, res) => {
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(botConnected ? 'Bot aktif ve bagli' : 'Bot baslatiliyor. QR icin /qr adresine gidin');
+    res.end(botConnected ? 'Bot aktif ve bagli' : 'Bot baslatiliyor');
 }).listen(PORT, () => {
     console.log(`Sunucu port ${PORT} uzerinde calisiyor`);
 });
@@ -102,89 +96,34 @@ function getPhoneVariants(value) {
     return Array.from(variants);
 }
 
-function normalizeJidUser(jid) {
-    return String(jid || '').split('@')[0];
-}
-
-function rememberPhoneMapping(lid, phoneJid) {
-    const lidUser = normalizeJidUser(lid);
-    const phoneUser = normalizeJidUser(phoneJid);
-    const normalizedPhone = normalizePhone(phoneUser);
-
-    if (!lidUser || !normalizedPhone) {
-        return;
+function extractPhoneFromChatId(chatId) {
+    const value = String(chatId || '');
+    if (!value.endsWith('@c.us')) {
+        return '';
     }
 
-    lidToPhoneMap.set(lidUser, normalizedPhone);
-    console.log(`LID eslemesi kaydedildi: ${lidUser} -> ${normalizedPhone}`);
+    return normalizePhone(value.split('@')[0]);
 }
 
-function extractCandidatePhones(msg) {
-    const candidates = [
-        msg?.key?.remoteJid,
-        msg?.key?.participant,
-        msg?.participant,
-        msg?.senderPn,
-        msg?.participantPn,
-        msg?.pushName,
-        msg?.message?.extendedTextMessage?.contextInfo?.participant,
-        msg?.message?.extendedTextMessage?.contextInfo?.participantPn,
-        msg?.message?.senderKeyDistributionMessage?.groupId,
-    ];
-
-    const phones = new Set();
-
-    for (const candidate of candidates) {
-        const raw = String(candidate || '');
-        if (!raw) {
-            continue;
-        }
-
-        if (raw.includes('@s.whatsapp.net')) {
-            phones.add(raw.split('@')[0]);
-            continue;
-        }
-
-        if (raw.includes('@lid')) {
-            const mappedPhone = lidToPhoneMap.get(normalizeJidUser(raw));
-            if (mappedPhone) {
-                phones.add(mappedPhone);
-            }
-            continue;
-        }
-
-        const normalized = normalizePhone(raw);
-        if (normalized.length >= 10 && normalized.length <= 15) {
-            phones.add(normalized);
-        }
-    }
-
-    return Array.from(phones);
-}
-
-function isAllowedUser(msg) {
+function isAllowedPhone(phone) {
     if (ALLOWED_USERS.size === 0) {
         if (!didWarnMissingAllowedUsers) {
             console.warn('UYARI: ALLOWED_USERS bos. Bot tum ozel mesajlari yanitlayacak.');
             didWarnMissingAllowedUsers = true;
         }
-        return { allowed: true, matchedPhone: null, candidatePhones: [] };
+        return true;
     }
 
-    const candidatePhones = extractCandidatePhones(msg);
+    const senderVariants = getPhoneVariants(phone);
 
-    for (const senderPhone of candidatePhones) {
-        const senderVariants = getPhoneVariants(senderPhone);
-
-        for (const allowedUser of ALLOWED_USERS) {
-            const allowedVariants = getPhoneVariants(allowedUser);
-            if (allowedVariants.some((variant) => senderVariants.includes(variant))) {
-                return { allowed: true, matchedPhone: senderPhone, candidatePhones };
-            }
+    for (const allowedUser of ALLOWED_USERS) {
+        const allowedVariants = getPhoneVariants(allowedUser);
+        if (allowedVariants.some((variant) => senderVariants.includes(variant))) {
+            return true;
         }
     }
 
-    return { allowed: false, matchedPhone: null, candidatePhones };
+    return false;
 }
 
 function normalizeApartmentInput(input) {
@@ -270,15 +209,6 @@ function formatBorcMesaji(daireNo, faturalar) {
     return `Daire ${daireNo} borc ozeti\n\n${satirlar}Toplam: ${formatTL(toplam)}\n\nOdeme icin yonetim ile iletisime gecebilirsiniz.`;
 }
 
-function getMessageText(message) {
-    return (
-        message.message?.conversation ||
-        message.message?.extendedTextMessage?.text ||
-        message.message?.imageMessage?.caption ||
-        ''
-    ).trim();
-}
-
 function normalizeCommandText(text) {
     return String(text || '')
         .trim()
@@ -307,118 +237,106 @@ function getHelpText() {
     ].join('\n');
 }
 
-async function handleMessage(sock, msg) {
-    const jid = msg.key.remoteJid;
-    if (!jid || jid.endsWith('@g.us')) {
+async function handleMessage(message) {
+    const chatId = message.from;
+    if (!chatId || chatId.endsWith('@g.us')) {
         return;
     }
 
-    const auth = isAllowedUser(msg);
-    if (!auth.allowed) {
-        console.log(`Izin verilmeyen numara engellendi: ${jid} phones=${JSON.stringify(auth.candidatePhones)}`);
+    const senderPhone = extractPhoneFromChatId(chatId);
+    if (!senderPhone) {
+        console.log(`Telefon numarasi okunamadi: ${chatId}`);
         return;
     }
 
-    if (auth.matchedPhone) {
-        console.log(`Izinli kullanici eslesti: ${auth.matchedPhone}`);
+    if (!isAllowedPhone(senderPhone)) {
+        console.log(`Izin verilmeyen numara engellendi: ${senderPhone}`);
+        return;
     }
 
-    const text = getMessageText(msg);
+    const text = String(message.body || '').trim();
     if (!text) {
         return;
     }
 
+    console.log(`Izinli kullanici eslesti: ${senderPhone}`);
+
     if (isHelpMessage(text)) {
-        await sock.sendMessage(jid, { text: getHelpText() });
+        await message.reply(getHelpText());
         return;
     }
 
     const daireNo = normalizeApartmentInput(text);
     if (!daireNo) {
-        await sock.sendMessage(jid, { text: `Gecersiz daire kodu.\n\n${getHelpText()}` });
+        await message.reply(`Gecersiz daire kodu.\n\n${getHelpText()}`);
         return;
     }
 
-    await sock.sendMessage(jid, { text: `${daireNo} icin borc bilgisi sorgulaniyor...` });
+    await message.reply(`${daireNo} icin borc bilgisi sorgulaniyor...`);
 
     const result = await getBorclar(daireNo);
     if (!result.success) {
-        await sock.sendMessage(jid, { text: `Hata: ${result.message}` });
+        await message.reply(`Hata: ${result.message}`);
         return;
     }
 
-    await sock.sendMessage(jid, { text: formatBorcMesaji(daireNo, result.data) });
+    await message.reply(formatBorcMesaji(daireNo, result.data));
 }
 
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version } = await fetchLatestBaileysVersion();
+const client = new Client({
+    authStrategy: new LocalAuth({ clientId: 'parkevler-bot' }),
+    puppeteer: {
+        headless: true,
+        executablePath: PUPPETEER_EXECUTABLE_PATH,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+        ],
+    },
+});
 
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'silent' }),
-        auth: state,
-        printQRInTerminal: false,
-    });
+client.on('qr', (qr) => {
+    currentQR = qr;
+    botConnected = false;
+    console.log('\nWhatsApp QR hazir. Telefonunuzdan sunucu terminalindeki kodu taratin:\n');
+    qrcodeTerminal.generate(qr, { small: true });
+    console.log('\nQR yenilenirse terminale tekrar basilir.\n');
+});
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
+client.on('ready', () => {
+    currentQR = null;
+    botConnected = true;
+    console.log('WhatsApp baglantisi kuruldu. Bot aktif.');
+});
 
-        if (qr) {
-            currentQR = qr;
-            botConnected = false;
-            console.log('\nWhatsApp QR hazir. Telefonunuzdan sunucu terminalindeki kodu taratin:\n');
-            qrcodeTerminal.generate(qr, { small: true });
-            console.log('\nQR yenilenirse terminale tekrar basilir.\n');
-        }
+client.on('authenticated', () => {
+    console.log('WhatsApp oturumu dogrulandi.');
+});
 
-        if (connection === 'close') {
-            botConnected = false;
-            currentQR = null;
+client.on('auth_failure', (message) => {
+    botConnected = false;
+    console.error(`WhatsApp auth hatasi: ${message}`);
+});
 
-            const disconnectCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = disconnectCode !== DisconnectReason.loggedOut;
+client.on('disconnected', (reason) => {
+    botConnected = false;
+    currentQR = null;
+    console.log(`WhatsApp baglantisi kapandi: ${reason}`);
+});
 
-            console.log(`Baglanti kapandi. Kod: ${disconnectCode || 'bilinmiyor'}`);
-
-            if (shouldReconnect) {
-                startBot().catch((error) => {
-                    console.error('Yeniden baglanma hatasi:', error);
-                });
-            }
-        }
-
-        if (connection === 'open') {
-            botConnected = true;
-            currentQR = null;
-            console.log('WhatsApp baglantisi kuruldu. Bot aktif.');
-        }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
-        rememberPhoneMapping(lid, jid);
-    });
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') {
-            return;
-        }
-
-        for (const msg of messages) {
-            if (msg.key.fromMe) {
-                continue;
-            }
-
-            try {
-                await handleMessage(sock, msg);
-            } catch (error) {
-                console.error('Mesaj isleme hatasi:', error);
-            }
-        }
-    });
-}
+client.on('message', async (message) => {
+    try {
+        await handleMessage(message);
+    } catch (error) {
+        console.error('Mesaj isleme hatasi:', error);
+    }
+});
 
 console.log('Parkevler2 WhatsApp Bot baslatiliyor...');
-startBot().catch((error) => {
+client.initialize().catch((error) => {
     console.error('Bot baslatma hatasi:', error);
 });

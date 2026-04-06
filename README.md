@@ -1,6 +1,6 @@
 # Parkevler2 WhatsApp Bot
 
-Bu bot, sadece izin verilen telefon numaralarindan gelen mesajlara cevap verir ve `A1-A10` ile `B1-B60` araligindaki daireler icin borc sorgusu yapar.
+Bu bot, `whatsapp-web.js` kullanir; sadece izin verilen telefon numaralarindan gelen mesajlara cevap verir ve `A1-A10` ile `B1-B60` araligindaki daireler icin borc sorgusu yapar.
 
 ## Kurulum
 
@@ -9,12 +9,13 @@ Bu bot, sadece izin verilen telefon numaralarindan gelen mesajlara cevap verir v
 3. `.env` icindeki `ALLOWED_USERS` alanina cevap verilmesini istediginiz numaralari yazin
 4. `npm start`
 5. Sunucu terminalinde olusan QR kodu WhatsApp ile taratin
+6. Giris yapildiktan sonra oturum `.wwebjs_auth/` klasorunde saklanir
 
 ## QR kullanimi
 
 - Bot baslayinca QR terminale basilacaktir
 - Telefonda `WhatsApp > Bagli Cihazlar > Cihaz Ekle` yolunu izleyip terminaldeki QR'i okutun
-- `/qr` adresi artik sadece terminalden taratmaniz gerektigini hatirlatir
+- Oturum kaydi silinmezse her yeniden baslatmada tekrar QR gerekmez
 
 ## Telefon numarasi formati
 
@@ -41,3 +42,18 @@ Bot su istegi atar:
 - `GET https://parkevler2sitesi.com.tr/api.php?action=payment-filter&daireno=A4&status=odenmedi`
 
 API bos dizi dondururse borc yok kabul edilir.
+
+## Ubuntu notu
+
+`whatsapp-web.js` Chrome/Chromium tabanli calisir. Ubuntu sunucuda eksikse su paketler gerekebilir:
+
+```bash
+sudo apt update
+sudo apt install -y chromium-browser
+```
+
+Eger Chromium farkli bir yoldaysa `.env` icine ekleyebilirsiniz:
+
+```env
+PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+```
