@@ -303,24 +303,43 @@ async function getBorclar(daireNo) {
 
 function formatBorcMesaji(daireNo, faturalar) {
     if (!faturalar || faturalar.length === 0) {
-        return `Daire ${daireNo}\n\nOdenmemis borc bulunmamaktadir.`;
+        return [
+            `✅ *Daire ${daireNo}*`,
+            '',
+            'Harika haber!',
+            'Bu daire icin su anda gorunen *odenmemis borc* bulunmamaktadir.',
+            '',
+            '🎉 Iyi gunlerde oturun.',
+        ].join('\n');
     }
 
     let toplam = 0;
-    let satirlar = '';
+    const satirlar = [];
 
     faturalar.forEach((fatura, index) => {
         const tutar = Number(fatura.amount || 0);
         toplam += tutar;
+        const satir = [
+            `${index + 1}. 📌 *${fatura.period || '-'}*`,
+            `   Tur: ${fatura.category || '-'}`,
+        ];
 
-        satirlar += `${index + 1}. ${fatura.period || '-'} - ${fatura.category || '-'}\n`;
         if (fatura.description) {
-            satirlar += `Aciklama: ${fatura.description}\n`;
+            satir.push(`   Aciklama: ${fatura.description}`);
         }
-        satirlar += `Tutar: ${formatTL(tutar)}\n\n`;
+        satir.push(`   Tutar: *${formatTL(tutar)}*`);
+        satirlar.push(satir.join('\n'));
     });
 
-    return `Daire ${daireNo} borc ozeti\n\n${satirlar}Toplam: ${formatTL(toplam)}\n\nOdeme icin yonetim ile iletisime gecebilirsiniz.`;
+    return [
+        `🏠 *Daire ${daireNo} Borc Ozeti*`,
+        '━━━━━━━━━━━━━━',
+        satirlar.join('\n\n'),
+        '━━━━━━━━━━━━━━',
+        `💳 *Toplam Borc:* ${formatTL(toplam)}`,
+        '',
+        'Odeme icin yonetim ile iletisime gecebilirsiniz.',
+    ].join('\n');
 }
 
 function normalizeCommandText(text) {
@@ -342,12 +361,12 @@ function isHelpMessage(text) {
 
 function getHelpText() {
     return [
-        'Parkevler2 borc sorgulama servisi',
+        '👋 *Parkevler2 Borc Sorgulama*',
         '',
         'Lutfen sadece daire kodunu gonderin.',
-        'Gecerli ornekler: A1, A4, B12, B54',
-        'Kucuk-buyuk harf fark etmez.',
-        'Gecersiz kod ornekleri: 12, C4, A11, B61',
+        '✅ Gecerli ornekler: A1, A4, B12, B54',
+        '🔠 Kucuk-buyuk harf fark etmez.',
+        '❌ Gecersiz ornekler: 12, C4, A11, B61',
     ].join('\n');
 }
 
@@ -478,7 +497,7 @@ async function handleAdminCommand(message, identity, text) {
         }
 
         const lines = pendingLids.map((entry, index) => `${index + 1}. ${entry.lid} - ${entry.seenAt}`);
-        await message.reply(`Bekleyen LID listesi\n\n${lines.join('\n')}`);
+        await message.reply(`🕒 *Bekleyen LID Listesi*\n\n${lines.join('\n')}`);
         return true;
     }
 
@@ -490,7 +509,7 @@ async function handleAdminCommand(message, identity, text) {
         }
 
         const lines = entries.map(([phone, lid], index) => `${index + 1}. ${phone} = ${lid}`);
-        await message.reply(`Onayli eslesmeler\n\n${lines.join('\n')}`);
+        await message.reply(`✅ *Onayli Eslesmeler*\n\n${lines.join('\n')}`);
         return true;
     }
 
@@ -512,7 +531,7 @@ async function handleAdminCommand(message, identity, text) {
         }
 
         consumePendingLid(lidToMap);
-        await message.reply(`Esleme kaydedildi.\n${command.phone} = ${lidToMap}`);
+        await message.reply(`✅ *Esleme kaydedildi*\n${command.phone} = ${lidToMap}`);
         console.log(`Admin esleme kaydetti: ${command.phone} = ${lidToMap}`);
         return true;
     }
@@ -530,7 +549,7 @@ async function handleAdminCommand(message, identity, text) {
 
         delete lidMappings.phoneToLid[command.phone];
         saveLidMappings();
-        await message.reply(`Eslesme silindi: ${command.phone}`);
+        await message.reply(`🗑️ *Eslesme silindi*\n${command.phone}`);
         console.log(`Admin esleme sildi: ${command.phone}`);
         return true;
     }
@@ -581,15 +600,15 @@ async function handleMessage(message) {
 
     const daireNo = normalizeApartmentInput(text);
     if (!daireNo) {
-        await message.reply(`Gecersiz daire kodu.\n\n${getHelpText()}`);
+        await message.reply(`❌ *Gecersiz daire kodu*\n\n${getHelpText()}`);
         return;
     }
 
-    await message.reply(`${daireNo} icin borc bilgisi sorgulaniyor...`);
+    await message.reply(`🔎 *${daireNo}* icin borc bilgisi sorgulaniyor...`);
 
     const result = await getBorclar(daireNo);
     if (!result.success) {
-        await message.reply(`Hata: ${result.message}`);
+        await message.reply(`⚠️ *Sorgu hatasi*\n${result.message}`);
         return;
     }
 
