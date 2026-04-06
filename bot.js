@@ -8,15 +8,16 @@ const {
   makeCacheableSignalKeyStore,
 } = require('@whiskeysockets/baileys');
 
-const pino   = require('pino');
+const pino = require('pino');
 const QRCode = require('qrcode');
-const axios  = require('axios');
-const http   = require('http');
-const fs     = require('fs');
-const path   = require('path');
+const qrcodeTerminal = require('qrcode-terminal');
+const axios = require('axios');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 // =========================
-// AYARLAR — sadece burası değişir
+// AYARLAR
 // =========================
 const ALLOWED_USERS = [
   '905542812424@s.whatsapp.net',
@@ -24,19 +25,19 @@ const ALLOWED_USERS = [
 ];
 
 const API_BASE_URL = 'https://parkevler2sitesi.com.tr/api.php';
-const AUTH_FOLDER  = path.join(__dirname, 'auth_info');
-const PORT         = 8080;
-const PUBLIC_IP    = '16.170.215.163';
+const AUTH_FOLDER = path.join(__dirname, 'auth_info');
+const PORT = 8080;
+const PUBLIC_IP = '16.170.215.163';
 
 // =========================
 // GLOBAL STATE
 // =========================
-let sock           = null;
-let currentQR      = null;
-let botConnected   = false;
+let sock = null;
+let currentQR = null;
+let botConnected = false;
 let reconnectTimer = null;
-let isStarting     = false;
-const sessions     = {};
+let isStarting = false;
+const sessions = {};
 
 // =========================
 // YARDIMCI FONKSİYONLAR
@@ -105,12 +106,12 @@ function getMessageText(msg) {
 function isYetkiliFromMsg(msg) {
   const remoteJid = cleanJid(msg?.key?.remoteJid || '');
 
-  // Grup mesajlarına cevap verme
+  // Grup mesajlarına cevap yok
   if (!remoteJid || remoteJid.endsWith('@g.us')) {
     return { ok: false, matched: null, reason: 'group-or-empty' };
   }
 
-  // Sadece telefon formatındaki özel mesajlar
+  // Yalnızca telefon formatındaki özel mesajlar
   if (!isPhoneJid(remoteJid)) {
     return { ok: false, matched: remoteJid, reason: 'not-phone-jid' };
   }
@@ -294,7 +295,7 @@ async function handleMessage(sock, msg) {
   const jid = msg?.key?.remoteJid;
   if (!jid) return;
 
-  // Gruplardan mesajlara cevap verme
+  // Grup mesajlarına cevap verme
   if (jid.endsWith('@g.us')) return;
 
   const authCheck = isYetkiliFromMsg(msg);
@@ -420,7 +421,13 @@ async function startBot() {
       if (qr) {
         currentQR = qr;
         botConnected = false;
-        log(`📱 Yeni QR üretildi → http://${PUBLIC_IP}:${PORT}/qr`);
+
+        log('📱 QR HAZIR');
+        log(`🌐 Web QR: http://${PUBLIC_IP}:${PORT}/qr`);
+        log('📲 Terminal QR aşağıda:');
+        console.log('');
+        qrcodeTerminal.generate(qr, { small: true });
+        console.log('');
       }
 
       if (connection === 'open') {
@@ -485,6 +492,10 @@ function scheduleReconnect(delay = 5000) {
 // =========================
 // BAŞLAT
 // =========================
+log('🚀 BOT BAŞLIYOR...');
+log('🌐 SUNUCU CALISIYOR');
+log(`📁 Auth klasoru: ${AUTH_FOLDER}`);
+log(`🔗 QR: http://${PUBLIC_IP}:${PORT}/qr`);
 startBot();
 
 // =========================
