@@ -71,9 +71,54 @@ function normalizeDaireNo(input) {
   return null;
 }
 
-function isYetkili(jid) {
-  const numara = jid.replace(/@.*$/, '');
-  return ALLOWED_USERS.some(u => u.replace(/@.*$/, '') === numara);
+function cleanJid(jid = '') {
+  return String(jid || '').trim();
+}
+
+function extractNumericId(jid = '') {
+  return cleanJid(jid).replace(/@.*$/, '');
+}
+
+function isPhoneJid(jid = '') {
+  return /@s\.whatsapp\.net$/.test(jid);
+}
+
+function isLidJid(jid = '') {
+  return /@lid$/.test(jid);
+}
+
+function getSenderCandidates(msg) {
+  return [
+    msg?.key?.participant,
+    msg?.key?.remoteJid,
+    msg?.message?.senderKeyDistributionMessage?.groupId,
+    msg?.pushName,
+  ].filter(Boolean);
+}
+
+function isYetkiliFromMsg(msg) {
+  const candidates = [
+    msg?.key?.participant,
+    msg?.key?.remoteJid,
+    msg?.participant,
+    msg?.sender,
+  ].filter(Boolean);
+
+  const allowedNumbers = ALLOWED_USERS.map(u => extractNumericId(u));
+
+  for (const jid of candidates) {
+    const numeric = extractNumericId(jid);
+
+    if (allowedNumbers.includes(numeric)) {
+      return { ok: true, matched: jid, reason: 'direct-match' };
+    }
+  }
+
+  return {
+    ok: false,
+    matched: candidates[0] || null,
+    reason: candidates.some(j => isLidJid(j)) ? 'lid-unresolved' : 'no-match',
+  };
 }
 function getMessageText(msg) {
   return (
@@ -212,12 +257,21 @@ http.createServer(async (req, res) => {
 // =========================
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
-  if (!jid)                   return;
-  if (jid.endsWith('@g.us'))  return;  // grup mesajlarını yoksay
-  if (!isYetkili(jid)) {
-    log(`⛔ Yetkisiz kullanıcı: ${jid}`);
+  if (!jid) return;
+  if (jid.endsWith('@g.us')) return; // grup mesajlarını yoksay
+
+  const authCheck = isYetkiliFromMsg(msg);
+
+  if (!authCheck.ok) {
+    log(`⛔ Yetkisiz kullanıcı: remoteJid=${msg?.key?.remoteJid || '-'} participant=${msg?.key?.participant || '-'} reason=${authCheck.reason}`);
     return;
   }
+
+  const replyJid = authCheck.matched || jid;
+  const text = getMessageText(msg);
+  if (!text) return;
+
+  log(`📨 Mesaj [${replyJid}]: ${text}`);
 
   const text = getMessageText(msg);
   if (!text) return;
