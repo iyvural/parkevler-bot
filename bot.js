@@ -72,9 +72,9 @@ function normalizeDaireNo(input) {
 }
 
 function isYetkili(jid) {
-  return ALLOWED_USERS.includes(jid);
+  const numara = jid.replace(/@.*$/, '');
+  return ALLOWED_USERS.some(u => u.replace(/@.*$/, '') === numara);
 }
-
 function getMessageText(msg) {
   return (
     msg.message?.conversation ||
