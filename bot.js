@@ -44,6 +44,17 @@ http.createServer(async (req, res) => {
         return;
     }
 
+    if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+            ok: true,
+            botConnected,
+            hasQR: Boolean(currentQR),
+            time: new Date().toISOString(),
+        }));
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(botConnected ? 'Bot aktif ve bagli' : 'Bot baslatiliyor. QR icin /qr adresine gidin');
 }).listen(PORT, () => {
