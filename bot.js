@@ -1,6 +1,6 @@
 const ALLOWED_USERS = [
-  '905542812425@s.whatsapp.net',
-  '905yyyyyyyyy@s.whatsapp.net'
+  '905542812424@s.whatsapp.net',
+  '905529201746@s.whatsapp.net'
 ];
 
 
