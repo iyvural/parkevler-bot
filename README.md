@@ -8,7 +8,13 @@ Bu bot, sadece izin verilen telefon numaralarindan gelen mesajlara cevap verir v
 2. `.env.example` dosyasini `.env` olarak kopyalayin
 3. `.env` icindeki `ALLOWED_USERS` alanina cevap verilmesini istediginiz numaralari yazin
 4. `npm start`
-5. Tarayicidan `http://SUNUCU_IP:3000/qr` adresini acip WhatsApp ile QR okutun
+5. Sunucu terminalinde olusan QR kodu WhatsApp ile taratin
+
+## QR kullanimi
+
+- Bot baslayinca QR terminale basilacaktir
+- Telefonda `WhatsApp > Bagli Cihazlar > Cihaz Ekle` yolunu izleyip terminaldeki QR'i okutun
+- `/qr` adresi artik sadece terminalden taratmaniz gerektigini hatirlatir
 
 ## Telefon numarasi formati
 

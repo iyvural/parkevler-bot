@@ -7,7 +7,7 @@ const {
     fetchLatestBaileysVersion,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const QRCode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const axios = require('axios');
 const http = require('http');
 
@@ -28,14 +28,8 @@ http.createServer(async (req, res) => {
         }
 
         if (currentQR) {
-            try {
-                const qrImage = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f9f9f9"><h2>Parkevler2 WhatsApp Bot</h2><p style="color:#555">WhatsApp -> Bagli Cihazlar -> Cihaz Ekle -> Bu kodu okutun</p><div style="display:inline-block;padding:16px;background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1)"><img src="${qrImage}" style="display:block"/></div><p style="color:#aaa;font-size:13px;margin-top:16px">Kod 60 saniyede yenilenir. Sayfa otomatik yenilenir.</p><script>setTimeout(()=>location.reload(), 25000)</script></body></html>`);
-            } catch (error) {
-                res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end(`QR olusturulamadi: ${error.message}`);
-            }
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('QR terminal uzerinde uretiliyor. Sunucu konsolundaki karekodu WhatsApp ile taratin.');
             return;
         }
 
@@ -304,7 +298,9 @@ async function startBot() {
         if (qr) {
             currentQR = qr;
             botConnected = false;
-            console.log('QR hazir. Sunucu adresinize /qr ekleyip tarayicidan acin.');
+            console.log('\nWhatsApp QR hazir. Telefonunuzdan sunucu terminalindeki kodu taratin:\n');
+            qrcodeTerminal.generate(qr, { small: true });
+            console.log('\nQR yenilenirse terminale tekrar basilir.\n');
         }
 
         if (connection === 'close') {
