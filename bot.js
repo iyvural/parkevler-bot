@@ -370,6 +370,10 @@ function getHelpText() {
     ].join('\n');
 }
 
+async function sendPlainMessage(chatId, text) {
+    await client.sendMessage(chatId, text);
+}
+
 function getAdminHelpText() {
     return [
         'Admin komutlari',
@@ -486,75 +490,75 @@ async function handleAdminCommand(message, identity, text) {
     }
 
     if (!isAuthorizedForAdminCommand(identity, command)) {
-        await message.reply('Admin yetkisi yok. Gecerli admin numarasi veya dogru ADMIN_CODE gerekli.');
+        await sendPlainMessage(message.from, 'Admin yetkisi yok. Gecerli admin numarasi veya dogru ADMIN_CODE gerekli.');
         return true;
     }
 
     if (command.type === 'pending') {
         if (pendingLids.length === 0) {
-            await message.reply('Bekleyen LID yok.');
+            await sendPlainMessage(message.from, 'Bekleyen LID yok.');
             return true;
         }
 
         const lines = pendingLids.map((entry, index) => `${index + 1}. ${entry.lid} - ${entry.seenAt}`);
-        await message.reply(`🕒 *Bekleyen LID Listesi*\n\n${lines.join('\n')}`);
+        await sendPlainMessage(message.from, `🕒 *Bekleyen LID Listesi*\n\n${lines.join('\n')}`);
         return true;
     }
 
     if (command.type === 'approved') {
         const entries = Object.entries(lidMappings.phoneToLid);
         if (entries.length === 0) {
-            await message.reply('Onayli eslesme yok.');
+            await sendPlainMessage(message.from, 'Onayli eslesme yok.');
             return true;
         }
 
         const lines = entries.map(([phone, lid], index) => `${index + 1}. ${phone} = ${lid}`);
-        await message.reply(`✅ *Onayli Eslesmeler*\n\n${lines.join('\n')}`);
+        await sendPlainMessage(message.from, `✅ *Onayli Eslesmeler*\n\n${lines.join('\n')}`);
         return true;
     }
 
     if (command.type === 'map') {
         if (!command.phone) {
-            await message.reply(`Telefon numarasi eksik.\n\n${getAdminHelpText()}`);
+            await sendPlainMessage(message.from, `Telefon numarasi eksik.\n\n${getAdminHelpText()}`);
             return true;
         }
 
         const lidToMap = String(command.lid || '').trim() || pendingLids[0]?.lid || '';
         if (!lidToMap) {
-            await message.reply('Esletirilecek bekleyen LID bulunamadi. Once o kisi bota bir mesaj gondersin.');
+            await sendPlainMessage(message.from, 'Esletirilecek bekleyen LID bulunamadi. Once o kisi bota bir mesaj gondersin.');
             return true;
         }
 
         if (!setLidMapping(command.phone, lidToMap)) {
-            await message.reply('Esleme kaydedilemedi.');
+            await sendPlainMessage(message.from, 'Esleme kaydedilemedi.');
             return true;
         }
 
         consumePendingLid(lidToMap);
-        await message.reply(`✅ *Esleme kaydedildi*\n${command.phone} = ${lidToMap}`);
+        await sendPlainMessage(message.from, `✅ *Esleme kaydedildi*\n${command.phone} = ${lidToMap}`);
         console.log(`Admin esleme kaydetti: ${command.phone} = ${lidToMap}`);
         return true;
     }
 
     if (command.type === 'delete') {
         if (!command.phone) {
-            await message.reply(`Silinecek telefon numarasi eksik.\n\n${getAdminHelpText()}`);
+            await sendPlainMessage(message.from, `Silinecek telefon numarasi eksik.\n\n${getAdminHelpText()}`);
             return true;
         }
 
         if (!lidMappings.phoneToLid[command.phone]) {
-            await message.reply('Bu telefon icin kayitli eslesme yok.');
+            await sendPlainMessage(message.from, 'Bu telefon icin kayitli eslesme yok.');
             return true;
         }
 
         delete lidMappings.phoneToLid[command.phone];
         saveLidMappings();
-        await message.reply(`🗑️ *Eslesme silindi*\n${command.phone}`);
+        await sendPlainMessage(message.from, `🗑️ *Eslesme silindi*\n${command.phone}`);
         console.log(`Admin esleme sildi: ${command.phone}`);
         return true;
     }
 
-    await message.reply(getAdminHelpText());
+    await sendPlainMessage(message.from, getAdminHelpText());
     return true;
 }
 
@@ -594,25 +598,25 @@ async function handleMessage(message) {
     console.log(`Izinli kullanici eslesti: ${senderPhone}`);
 
     if (isHelpMessage(text)) {
-        await message.reply(getHelpText());
+        await sendPlainMessage(message.from, getHelpText());
         return;
     }
 
     const daireNo = normalizeApartmentInput(text);
     if (!daireNo) {
-        await message.reply(`❌ *Gecersiz daire kodu*\n\n${getHelpText()}`);
+        await sendPlainMessage(message.from, `❌ *Gecersiz daire kodu*\n\n${getHelpText()}`);
         return;
     }
 
-    await message.reply(`🔎 *${daireNo}* icin borc bilgisi sorgulaniyor...`);
+    await sendPlainMessage(message.from, `🔎 *${daireNo}* icin borc bilgisi sorgulaniyor...`);
 
     const result = await getBorclar(daireNo);
     if (!result.success) {
-        await message.reply(`⚠️ *Sorgu hatasi*\n${result.message}`);
+        await sendPlainMessage(message.from, `⚠️ *Sorgu hatasi*\n${result.message}`);
         return;
     }
 
-    await message.reply(formatBorcMesaji(daireNo, result.data));
+    await sendPlainMessage(message.from, formatBorcMesaji(daireNo, result.data));
 }
 
 const client = new Client({
