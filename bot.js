@@ -376,18 +376,20 @@ async function sendPlainMessage(chatId, text) {
 
 function getAdminHelpText() {
     return [
-        'Admin komutlari',
+        '🛠️ *Admin komutlari*',
         '',
         'bekleyenler',
         'onaylilar',
-        'eslestir 905542812424',
-        'eslestir 905542812424 27651033026731',
-        'sil 905542812424',
+        'eslestir 905xxxx',
+        'eslestir 905xxxx lidxxxx',
+        'sil 905xxxx',
         '',
-        'ADMIN_CODE tanimliysa su da calisir:',
-        'yonetici KOD bekleyenler',
-        'yonetici KOD onaylilar',
-        'yonetici KOD eslestir 905542812424',
+        'ADMIN_CODE ile kullanim:',
+        'yonetici xxxxxx bekleyenler',
+        'yonetici xxxxxx onaylilar',
+        'yonetici xxxxxx eslestir 905xxxx',
+        'yonetici xxxxxx eslestir 905xxxx lidxxxx',
+        'yonetici xxxxxx sil 905xxxx',
     ].join('\n');
 }
 
