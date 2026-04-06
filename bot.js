@@ -8,12 +8,12 @@ const {
   makeCacheableSignalKeyStore,
 } = require('@whiskeysockets/baileys');
 
-const pino        = require('pino');
-const QRCode      = require('qrcode');
-const axios       = require('axios');
-const http        = require('http');
-const fs          = require('fs');
-const path        = require('path');
+const pino   = require('pino');
+const QRCode = require('qrcode');
+const axios  = require('axios');
+const http   = require('http');
+const fs     = require('fs');
+const path   = require('path');
 
 // =========================
 // AYARLAR — sadece burası değişir
@@ -31,12 +31,12 @@ const PUBLIC_IP    = '16.170.215.163';
 // =========================
 // GLOBAL STATE
 // =========================
-let sock            = null;
-let currentQR       = null;
-let botConnected    = false;
-let reconnectTimer  = null;
-let isStarting      = false;
-const sessions      = {};
+let sock           = null;
+let currentQR      = null;
+let botConnected   = false;
+let reconnectTimer = null;
+let isStarting     = false;
+const sessions     = {};
 
 // =========================
 // YARDIMCI FONKSİYONLAR
@@ -48,27 +48,6 @@ function ensureDir(p) {
 function log(msg) {
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
   console.log(`[${ts}] ${msg}`);
-}
-
-function formatTL(amount) {
-  return (
-    parseFloat(amount || 0).toLocaleString('tr-TR', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }) + ' ₺'
-  );
-}
-
-function normalizeDaireNo(input) {
-  if (!input) return null;
-  const raw = String(input).trim().toUpperCase().replace(/\s+/g, '').replace(/-/g, '');
-  const match = raw.match(/^([AB])(\d{1,2})$/);
-  if (!match) return null;
-  const blok = match[1];
-  const no   = parseInt(match[2], 10);
-  if (blok === 'A' && no >= 1 && no <= 10) return `A${no}`;
-  if (blok === 'B' && no >= 1 && no <= 60) return `B${no}`;
-  return null;
 }
 
 function cleanJid(jid = '') {
@@ -83,43 +62,36 @@ function isPhoneJid(jid = '') {
   return /@s\.whatsapp\.net$/.test(jid);
 }
 
-function isLidJid(jid = '') {
-  return /@lid$/.test(jid);
+function formatTL(amount) {
+  return (
+    parseFloat(amount || 0).toLocaleString('tr-TR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }) + ' ₺'
+  );
 }
 
-function getSenderCandidates(msg) {
-  return [
-    msg?.key?.participant,
-    msg?.key?.remoteJid,
-    msg?.message?.senderKeyDistributionMessage?.groupId,
-    msg?.pushName,
-  ].filter(Boolean);
+function normalizeDaireNo(input) {
+  if (!input) return null;
+
+  const raw = String(input)
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/-/g, '');
+
+  const match = raw.match(/^([AB])(\d{1,2})$/);
+  if (!match) return null;
+
+  const blok = match[1];
+  const no = parseInt(match[2], 10);
+
+  if (blok === 'A' && no >= 1 && no <= 10) return `A${no}`;
+  if (blok === 'B' && no >= 1 && no <= 60) return `B${no}`;
+
+  return null;
 }
 
-function isYetkiliFromMsg(msg) {
-  const candidates = [
-    msg?.key?.participant,
-    msg?.key?.remoteJid,
-    msg?.participant,
-    msg?.sender,
-  ].filter(Boolean);
-
-  const allowedNumbers = ALLOWED_USERS.map(u => extractNumericId(u));
-
-  for (const jid of candidates) {
-    const numeric = extractNumericId(jid);
-
-    if (allowedNumbers.includes(numeric)) {
-      return { ok: true, matched: jid, reason: 'direct-match' };
-    }
-  }
-
-  return {
-    ok: false,
-    matched: candidates[0] || null,
-    reason: candidates.some(j => isLidJid(j)) ? 'lid-unresolved' : 'no-match',
-  };
-}
 function getMessageText(msg) {
   return (
     msg.message?.conversation ||
@@ -128,6 +100,29 @@ function getMessageText(msg) {
     msg.message?.videoMessage?.caption ||
     ''
   ).trim();
+}
+
+function isYetkiliFromMsg(msg) {
+  const remoteJid = cleanJid(msg?.key?.remoteJid || '');
+
+  // Grup mesajlarına cevap verme
+  if (!remoteJid || remoteJid.endsWith('@g.us')) {
+    return { ok: false, matched: null, reason: 'group-or-empty' };
+  }
+
+  // Sadece telefon formatındaki özel mesajlar
+  if (!isPhoneJid(remoteJid)) {
+    return { ok: false, matched: remoteJid, reason: 'not-phone-jid' };
+  }
+
+  const allowedNumbers = ALLOWED_USERS.map(u => extractNumericId(u));
+  const senderNumber = extractNumericId(remoteJid);
+
+  if (allowedNumbers.includes(senderNumber)) {
+    return { ok: true, matched: remoteJid, reason: 'direct-match' };
+  }
+
+  return { ok: false, matched: remoteJid, reason: 'no-match' };
 }
 
 // =========================
@@ -156,8 +151,13 @@ function formatBorcMesaji(daireNo, faturalar) {
   faturalar.forEach((f, i) => {
     const tutar = parseFloat(f.amount || 0);
     toplam += tutar;
+
     satirlar += `\n${i + 1}. *${f.period || '-'}* — ${f.category || '-'}\n`;
-    if (f.description) satirlar += `   📝 ${f.description}\n`;
+
+    if (f.description) {
+      satirlar += `   📝 ${f.description}\n`;
+    }
+
     satirlar += `   💰 ${formatTL(tutar)}\n`;
   });
 
@@ -177,16 +177,37 @@ function formatBorcMesaji(daireNo, faturalar) {
 async function getBorclar(daireNo) {
   try {
     const response = await axios.get(API_BASE_URL, {
-      params: { action: 'payment-filter', daireno: daireNo, status: 'odenmedi' },
+      params: {
+        action: 'payment-filter',
+        daireno: daireNo,
+        status: 'odenmedi',
+      },
       timeout: 15000,
     });
+
     const data = response.data;
-    if (Array.isArray(data))            return { success: true, data };
-    if (data?.status === 'error')       return { success: false, message: data.message || 'Bilinmeyen hata.' };
-    return { success: false, message: 'API geçersiz yanıt döndürdü.' };
+
+    if (Array.isArray(data)) {
+      return { success: true, data };
+    }
+
+    if (data?.status === 'error') {
+      return {
+        success: false,
+        message: data.message || 'Bilinmeyen hata.',
+      };
+    }
+
+    return {
+      success: false,
+      message: 'API geçersiz yanıt döndürdü.',
+    };
   } catch (err) {
     log('API hatası: ' + err.message);
-    return { success: false, message: 'Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.' };
+    return {
+      success: false,
+      message: 'Sunucuya bağlanılamadı. Lütfen daha sonra tekrar deneyin.',
+    };
   }
 }
 
@@ -194,40 +215,55 @@ async function getBorclar(daireNo) {
 // HTTP SUNUCUSU
 // =========================
 http.createServer(async (req, res) => {
-
   if (req.url === '/qr') {
     if (botConnected) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fff4">
-        <h2 style="color:green">✅ Bot zaten bağlı!</h2><p>WhatsApp bağlantısı aktif.</p>
-      </body></html>`);
+      res.end(`
+        <html>
+          <body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fff4">
+            <h2 style="color:green">✅ Bot zaten bağlı!</h2>
+            <p>WhatsApp bağlantısı aktif.</p>
+          </body>
+        </html>
+      `);
       return;
     }
 
     if (currentQR) {
       try {
         const qrImage = await QRCode.toDataURL(currentQR, { width: 400, margin: 2 });
+
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f9f9f9">
-          <h2>📱 Parkevler2 WhatsApp Bot</h2>
-          <p>WhatsApp → <b>Bağlı Cihazlar</b> → <b>Cihaz Ekle</b> → Bu kodu okutun</p>
-          <div style="display:inline-block;padding:16px;background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">
-            <img src="${qrImage}" style="display:block" />
-          </div>
-          <p style="color:#aaa;font-size:13px;margin-top:16px">Kod 20 saniyede yenilenir</p>
-          <script>setTimeout(()=>location.reload(),20000)</script>
-        </body></html>`);
+        res.end(`
+          <html>
+            <body style="font-family:sans-serif;text-align:center;padding:40px;background:#f9f9f9">
+              <h2>📱 Parkevler2 WhatsApp Bot</h2>
+              <p>WhatsApp → <b>Bağlı Cihazlar</b> → <b>Cihaz Ekle</b> → Bu kodu okutun</p>
+              <div style="display:inline-block;padding:16px;background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">
+                <img src="${qrImage}" style="display:block" />
+              </div>
+              <p style="color:#aaa;font-size:13px;margin-top:16px">Kod 20 saniyede yenilenir</p>
+              <script>setTimeout(()=>location.reload(),20000)</script>
+            </body>
+          </html>
+        `);
       } catch (e) {
-        res.writeHead(500); res.end('QR oluşturulamadı: ' + e.message);
+        res.writeHead(500);
+        res.end('QR oluşturulamadı: ' + e.message);
       }
       return;
     }
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:40px">
-      <h3>⏳ QR hazırlanıyor...</h3><p>10 saniye bekleyin.</p>
-      <script>setTimeout(()=>location.reload(),10000)</script>
-    </body></html>`);
+    res.end(`
+      <html>
+        <body style="font-family:sans-serif;text-align:center;padding:40px">
+          <h3>⏳ QR hazırlanıyor...</h3>
+          <p>10 saniye bekleyin.</p>
+          <script>setTimeout(()=>location.reload(),10000)</script>
+        </body>
+      </html>
+    `);
     return;
   }
 
@@ -245,7 +281,6 @@ http.createServer(async (req, res) => {
 
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(botConnected ? 'Bot aktif ve bagli' : 'Bot baslatiliyor... QR icin /qr adresine gidin');
-
 }).listen(PORT, '0.0.0.0', () => {
   log(`🚀 HTTP sunucu başladı → http://${PUBLIC_IP}:${PORT}`);
   log(`🔗 QR sayfası         → http://${PUBLIC_IP}:${PORT}/qr`);
@@ -256,22 +291,18 @@ http.createServer(async (req, res) => {
 // MESAJ İŞLEME
 // =========================
 async function handleMessage(sock, msg) {
-  const jid = msg.key.remoteJid;
+  const jid = msg?.key?.remoteJid;
   if (!jid) return;
-  if (jid.endsWith('@g.us')) return; // grup mesajlarını yoksay
+
+  // Gruplardan mesajlara cevap verme
+  if (jid.endsWith('@g.us')) return;
 
   const authCheck = isYetkiliFromMsg(msg);
 
   if (!authCheck.ok) {
-    log(`⛔ Yetkisiz kullanıcı: remoteJid=${msg?.key?.remoteJid || '-'} participant=${msg?.key?.participant || '-'} reason=${authCheck.reason}`);
+    log(`⛔ Yetkisiz kullanıcı: remoteJid=${jid} reason=${authCheck.reason}`);
     return;
   }
-
-  const replyJid = authCheck.matched || jid;
-  const text = getMessageText(msg);
-  if (!text) return;
-
-  log(`📨 Mesaj [${replyJid}]: ${text}`);
 
   const text = getMessageText(msg);
   if (!text) return;
@@ -279,7 +310,19 @@ async function handleMessage(sock, msg) {
   log(`📨 Mesaj [${jid}]: ${text}`);
 
   const textLower = text.toLowerCase();
-  const MENU_KEYWORDS = ['merhaba','selam','hi','hey','başla','basla','menu','menü','yardım','yardim','help'];
+  const MENU_KEYWORDS = [
+    'merhaba',
+    'selam',
+    'hi',
+    'hey',
+    'başla',
+    'basla',
+    'menu',
+    'menü',
+    'yardım',
+    'yardim',
+    'help',
+  ];
 
   if (MENU_KEYWORDS.includes(textLower) || !sessions[jid]) {
     sessions[jid] = { step: 'bekle_daire_no' };
@@ -297,26 +340,37 @@ async function handleMessage(sock, msg) {
         text:
           '❌ Geçersiz daire numarası.\n\n' +
           'Sadece şu daireler geçerlidir:\n' +
-          '• A1 - A10\n• B1 - B60\n\n' +
-          'Lütfen tekrar yazın.\n_Örnek: A1, a5, B12, b60_',
+          '• A1 - A10\n' +
+          '• B1 - B60\n\n' +
+          'Lütfen tekrar yazın.\n' +
+          '_Örnek: A1, a5, B12, b60_',
       });
       return;
     }
 
-    await sock.sendMessage(jid, { text: `🔍 *${daireNo}* nolu daire sorgulanıyor...` });
+    await sock.sendMessage(jid, {
+      text: `🔍 *${daireNo}* nolu daire sorgulanıyor...`,
+    });
 
     const result = await getBorclar(daireNo);
 
     if (!result.success) {
       await sock.sendMessage(jid, {
-        text: `❌ Hata: ${result.message}\n\nTekrar sorgulamak için geçerli bir daire numarası yazın.`,
+        text:
+          `❌ Hata: ${result.message}\n\n` +
+          'Tekrar sorgulamak için geçerli bir daire numarası yazın.',
       });
       return;
     }
 
-    await sock.sendMessage(jid, { text: formatBorcMesaji(daireNo, result.data) });
     await sock.sendMessage(jid, {
-      text: '🔄 Başka bir daire sorgulamak için daire numarasını yazın.\n⬅️ Ana menü için *menü* yazın.',
+      text: formatBorcMesaji(daireNo, result.data),
+    });
+
+    await sock.sendMessage(jid, {
+      text:
+        '🔄 Başka bir daire sorgulamak için daire numarasını yazın.\n' +
+        '⬅️ Ana menü için *menü* yazın.',
     });
   }
 }
@@ -329,13 +383,14 @@ async function startBot() {
     log('Bot zaten başlatılıyor, atlandı.');
     return;
   }
+
   isStarting = true;
 
   try {
     ensureDir(AUTH_FOLDER);
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
-    const { version }          = await fetchLatestBaileysVersion();
+    const { version } = await fetchLatestBaileysVersion();
 
     log(`Baileys version: ${version.join('.')}`);
 
@@ -344,61 +399,63 @@ async function startBot() {
       logger: pino({ level: 'silent' }),
       auth: {
         creds: state.creds,
-        // Signal key store'u cache'le — ghost connection'ı önler
-        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+        keys: makeCacheableSignalKeyStore(
+          state.keys,
+          pino({ level: 'silent' })
+        ),
       },
-      connectTimeoutMs:      60_000,
-      defaultQueryTimeoutMs: 30_000,
-      keepAliveIntervalMs:   15_000,   // daha sık ping — bağlantıyı canlı tutar
-      retryRequestDelayMs:   2_000,
-      maxMsgRetryCount:      5,
-      markOnlineOnConnect:   false,
-      syncFullHistory:       false,
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 30000,
+      keepAliveIntervalMs: 15000,
+      retryRequestDelayMs: 2000,
+      maxMsgRetryCount: 5,
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
       generateHighQualityLinkPreview: false,
     });
 
-    // --- Bağlantı olayları ---
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        currentQR    = qr;
+        currentQR = qr;
         botConnected = false;
-        log('📱 Yeni QR üretildi → ' + `http://${PUBLIC_IP}:${PORT}/qr`);
+        log(`📱 Yeni QR üretildi → http://${PUBLIC_IP}:${PORT}/qr`);
       }
 
       if (connection === 'open') {
         botConnected = true;
-        currentQR    = null;
+        currentQR = null;
         log('✅ WhatsApp bağlantısı kuruldu! Bot aktif.');
       }
 
       if (connection === 'close') {
         botConnected = false;
-        const code          = lastDisconnect?.error?.output?.statusCode;
-        const isLoggedOut   = code === DisconnectReason.loggedOut;
-        const isBadSession  = code === DisconnectReason.badSession;
+
+        const code = lastDisconnect?.error?.output?.statusCode;
+        const isLoggedOut = code === DisconnectReason.loggedOut;
+        const isBadSession = code === DisconnectReason.badSession;
 
         log(`❌ Bağlantı kapandı. Kod: ${code}`);
 
         if (isLoggedOut || isBadSession) {
-          log('⚠️  Oturum geçersiz. Auth klasörü siliniyor, yeniden QR gerekiyor...');
+          log('⚠️ Oturum geçersiz. Auth klasörü siliniyor, yeniden QR gerekiyor...');
           fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
           currentQR = null;
         }
 
-        // Her durumda yeniden bağlan (badSession için de — auth silindi, yeni QR çıkacak)
         scheduleReconnect(isLoggedOut || isBadSession ? 2000 : 5000);
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // --- Mesaj olayları ---
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
+
       for (const msg of messages) {
-        if (msg.key.fromMe) continue;
+        if (msg?.key?.fromMe) continue;
+
         try {
           await handleMessage(sock, msg);
         } catch (err) {
@@ -410,7 +467,7 @@ async function startBot() {
   } catch (err) {
     botConnected = false;
     log('startBot hatası: ' + err.message);
-    scheduleReconnect(10_000);
+    scheduleReconnect(10000);
   } finally {
     isStarting = false;
   }
@@ -418,6 +475,7 @@ async function startBot() {
 
 function scheduleReconnect(delay = 5000) {
   if (reconnectTimer) clearTimeout(reconnectTimer);
+
   reconnectTimer = setTimeout(() => {
     log(`🔄 Yeniden bağlanılıyor... (${delay}ms sonra)`);
     startBot().catch(e => log('Reconnect hatası: ' + e.message));
@@ -432,5 +490,10 @@ startBot();
 // =========================
 // HATA YAKALAMA
 // =========================
-process.on('uncaughtException',  (err)    => log('uncaughtException: '  + err.message));
-process.on('unhandledRejection', (reason) => log('unhandledRejection: ' + reason));
+process.on('uncaughtException', (err) => {
+  log('uncaughtException: ' + err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+  log('unhandledRejection: ' + reason);
+});
